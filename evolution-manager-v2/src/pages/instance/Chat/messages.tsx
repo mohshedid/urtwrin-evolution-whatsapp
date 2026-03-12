@@ -2,6 +2,7 @@ import { DropdownMenu, DropdownMenuTrigger } from "@radix-ui/react-dropdown-menu
 import { ArrowRightIcon, ChevronDownIcon, SparkleIcon, User, ZapIcon } from "lucide-react";
 import { RefObject, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
@@ -32,31 +33,30 @@ type MessagesProps = {
 };
 
 // Utility function to format dates like WhatsApp
-const formatDateSeparator = (date: Date): string => {
+const formatDateSeparator = (date: Date, t: (key: string) => string, locale: string): string => {
   const today = new Date();
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
 
   const messageDate = new Date(date);
 
-  // Check if it's today
   if (messageDate.toDateString() === today.toDateString()) {
-    return "Hoje";
+    return t("chat.date.today");
   }
 
-  // Check if it's yesterday
   if (messageDate.toDateString() === yesterday.toDateString()) {
-    return "Ontem";
+    return t("chat.date.yesterday");
   }
 
-  // Check if it's within the last week
   const daysDiff = Math.floor((today.getTime() - messageDate.getTime()) / (1000 * 60 * 60 * 24));
+  const localeMap: Record<string, string> = { "en-US": "en-US", "pt-BR": "pt-BR", "es-ES": "es-ES", "fr-FR": "fr-FR", "ar": "ar-SA" };
+  const dateLocale = localeMap[locale] || "en-US";
+
   if (daysDiff < 7) {
-    return messageDate.toLocaleDateString("pt-BR", { weekday: "long" });
+    return messageDate.toLocaleDateString(dateLocale, { weekday: "long" });
   }
 
-  // For older dates, show the full date
-  return messageDate.toLocaleDateString("pt-BR", {
+  return messageDate.toLocaleDateString(dateLocale, {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
@@ -289,6 +289,7 @@ const MessageContent = ({ message }: { message: Message }) => {
 };
 
 function Messages({ textareaRef, handleTextareaChange, textareaHeight, lastMessageRef, scrollToBottom }: MessagesProps) {
+  const { t, i18n } = useTranslation();
   const { instance } = useInstance();
   const [messageText, setMessageText] = useState("");
   const [isSending, setIsSending] = useState(false);
@@ -523,7 +524,7 @@ function Messages({ textareaRef, handleTextareaChange, textareaHeight, lastMessa
       if (dateString !== currentDate) {
         if (currentGroup.length > 0) {
           grouped.push({
-            date: formatDateSeparator(new Date(currentDate)),
+            date: formatDateSeparator(new Date(currentDate), t, i18n.language),
             messages: currentGroup,
           });
         }
@@ -536,7 +537,7 @@ function Messages({ textareaRef, handleTextareaChange, textareaHeight, lastMessa
 
     if (currentGroup.length > 0) {
       grouped.push({
-        date: formatDateSeparator(new Date(currentDate)),
+        date: formatDateSeparator(new Date(currentDate), t, i18n.language),
         messages: currentGroup,
       });
     }
@@ -651,7 +652,7 @@ function Messages({ textareaRef, handleTextareaChange, textareaHeight, lastMessa
         <div className="flex items-center rounded-3xl border border-border bg-background px-2 py-1">
           {instance && <MediaOptions instance={instance} setSelectedMedia={setSelectedMedia} />}
           <Textarea
-            placeholder="Enviar mensagem..."
+            placeholder={t("chat.sendPlaceholder")}
             name="message"
             id="message"
             rows={1}
@@ -665,7 +666,7 @@ function Messages({ textareaRef, handleTextareaChange, textareaHeight, lastMessa
           />
           <Button type="button" size="icon" onClick={sendMessage} disabled={(!messageText.trim() && !selectedMedia) || isSending} className="rounded-full p-2 disabled:opacity-50">
             <ArrowRightIcon className="h-6 w-6" />
-            <span className="sr-only">Enviar</span>
+            <span className="sr-only">{t("chat.send")}</span>
           </Button>
         </div>
       </div>

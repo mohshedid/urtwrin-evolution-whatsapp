@@ -113,4 +113,8 @@ export class ChatController {
   public async blockUser({ instanceName }: InstanceDto, data: BlockUserDto) {
     return await this.waMonitor.waInstances[instanceName].blockUser(data);
   }
+
+  public async syncContactsFromMessages({ instanceName }: InstanceDto) {
+    return await this.waMonitor.waInstances[instanceName].syncContactsFromMessages();
+  }
 }

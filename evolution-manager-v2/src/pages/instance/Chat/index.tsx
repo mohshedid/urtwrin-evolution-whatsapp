@@ -1,7 +1,8 @@
 import "./style.css";
-import { User, MessageCircle, PlusIcon } from "lucide-react";
+import { User, MessageCircle, PlusIcon, Search } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -28,10 +29,12 @@ const formatJid = (remoteJid: string): string => {
 };
 
 function Chat() {
+  const { t } = useTranslation();
   const isMD = useMediaQuery("(min-width: 768px)");
   const lastMessageRef = useRef<HTMLDivElement | null>(null);
   const [textareaHeight] = useState("auto");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
   const { instance } = useInstance();
 
   // Local state for real-time chats (to supplement React Query data)
@@ -185,18 +188,34 @@ function Chat() {
                 <PlusIcon className="h-4 w-4" />
               </Button>
             </div>
+            <div className="px-2 pb-2">
+              <div className="relative">
+                <Search className="absolute start-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="text"
+                  placeholder={t("chat.search")}
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full rounded-md border border-border bg-background py-1.5 ps-8 pe-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+              </div>
+            </div>
             <Tabs defaultValue="contacts" className="flex flex-col flex-1 min-h-0">
               <TabsList className="tabs-chat flex-shrink-0">
-                <TabsTrigger value="contacts">Contatos</TabsTrigger>
-                <TabsTrigger value="groups">Grupos</TabsTrigger>
+                <TabsTrigger value="contacts">{t("chat.contacts")}</TabsTrigger>
+                <TabsTrigger value="groups">{t("chat.groups")}</TabsTrigger>
               </TabsList>
               <TabsContent value="contacts" className="flex-1 overflow-hidden">
                 <div className="h-full overflow-auto">
                   <div className="grid gap-1 p-2 text-foreground">
-                    <div className="px-2 text-xs font-medium text-muted-foreground">Contatos</div>
-                    {chats?.map(
-                      (chat: ChatType) =>
-                        chat.remoteJid.includes("@s.whatsapp.net") && (
+                    <div className="px-2 text-xs font-medium text-muted-foreground">{t("chat.contacts")}</div>
+                    {chats?.filter((chat: ChatType) => {
+                      if (!searchTerm) return chat.remoteJid.includes("@s.whatsapp.net");
+                      const name = (chat.pushName || chat.remoteJid.split("@")[0]).toLowerCase();
+                      const number = chat.remoteJid.split("@")[0];
+                      return chat.remoteJid.includes("@s.whatsapp.net") && (name.includes(searchTerm.toLowerCase()) || number.includes(searchTerm));
+                    }).map(
+                      (chat: ChatType) => (
                           <Link
                             key={chat.id}
                             to="#"
@@ -204,7 +223,7 @@ function Chat() {
                             className={`chat-item flex items-center overflow-hidden truncate whitespace-nowrap rounded-md border-b border-gray-600/50 p-2 text-sm transition-colors hover:bg-muted/50 ${
                               remoteJid === chat.remoteJid ? "active" : ""
                             }`}>
-                            <span className="chat-avatar mr-2">
+                            <span className="chat-avatar me-2">
                               <Avatar className="h-8 w-8">
                                 <AvatarImage src={chat.profilePicUrl} alt={chat.pushName || chat.remoteJid.split("@")[0]} />
                                 <AvatarFallback className="bg-slate-700 text-slate-300 border border-slate-600">
@@ -225,9 +244,12 @@ function Chat() {
               <TabsContent value="groups" className="flex-1 overflow-hidden">
                 <div className="h-full overflow-auto">
                   <div className="grid gap-1 p-2 text-foreground">
-                    {allChats?.map(
-                      (chat: ChatType) =>
-                        chat.remoteJid.includes("@g.us") && (
+                    {allChats?.filter((chat: ChatType) => {
+                      if (!searchTerm) return chat.remoteJid.includes("@g.us");
+                      const name = (chat.pushName || chat.remoteJid.split("@")[0]).toLowerCase();
+                      return chat.remoteJid.includes("@g.us") && name.includes(searchTerm.toLowerCase());
+                    }).map(
+                      (chat: ChatType) => (
                           <Link
                             key={chat.id}
                             to="#"
@@ -235,7 +257,7 @@ function Chat() {
                             className={`chat-item flex items-center overflow-hidden truncate whitespace-nowrap rounded-md border-b border-gray-600/50 p-2 text-sm transition-colors hover:bg-muted/50 ${
                               remoteJid === chat.remoteJid ? "active" : ""
                             }`}>
-                            <span className="chat-avatar mr-2">
+                            <span className="chat-avatar me-2">
                               <Avatar className="h-8 w-8">
                                 <AvatarImage src={chat.profilePicUrl} alt={chat.pushName || chat.remoteJid.split("@")[0]} />
                                 <AvatarFallback className="bg-slate-700 text-slate-300 border border-slate-600">

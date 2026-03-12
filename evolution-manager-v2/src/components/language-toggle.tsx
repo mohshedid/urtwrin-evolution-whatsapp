@@ -22,11 +22,14 @@ export function LanguageToggle() {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem className={i18n.language === "pt-BR" ? "font-bold" : ""} onClick={() => changeLanguage("pt-BR")}>
-          {t("header.language.portuguese")}
-        </DropdownMenuItem>
         <DropdownMenuItem className={i18n.language === "en-US" ? "font-bold" : ""} onClick={() => changeLanguage("en-US")}>
           {t("header.language.english")}
+        </DropdownMenuItem>
+        <DropdownMenuItem className={i18n.language === "ar" ? "font-bold" : ""} onClick={() => changeLanguage("ar")}>
+          {t("header.language.arabic")}
+        </DropdownMenuItem>
+        <DropdownMenuItem className={i18n.language === "pt-BR" ? "font-bold" : ""} onClick={() => changeLanguage("pt-BR")}>
+          {t("header.language.portuguese")}
         </DropdownMenuItem>
         <DropdownMenuItem className={i18n.language === "es-ES" ? "font-bold" : ""} onClick={() => changeLanguage("es-ES")}>
           {t("header.language.spanish")}

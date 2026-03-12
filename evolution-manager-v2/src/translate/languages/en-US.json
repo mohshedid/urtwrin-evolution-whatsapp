@@ -40,12 +40,22 @@
     "language": {
       "label": "Language",
       "english": "English",
+      "arabic": "العربية",
       "portuguese": "Portuguese",
       "spanish": "Spanish",
       "french": "French"
     }
   },
   "chat": {
+    "contacts": "Contacts",
+    "groups": "Groups",
+    "search": "Search...",
+    "send": "Send",
+    "sendPlaceholder": "Send message...",
+    "date": {
+      "today": "Today",
+      "yesterday": "Yesterday"
+    },
     "media": {
       "attach": "Attach file",
       "document": "Document",

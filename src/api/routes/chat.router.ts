@@ -281,6 +281,12 @@ export class ChatRouter extends RouterBroker {
         });
 
         return res.status(HttpStatus.CREATED).json(response);
+      })
+      .post(this.routerPath('syncContacts'), ...guards, async (req, res) => {
+        const instance = req.params as unknown as InstanceDto;
+        const response = await chatController.syncContactsFromMessages(instance);
+
+        return res.status(HttpStatus.OK).json(response);
       });
   }
 

@@ -40,7 +40,9 @@
     "language": {
       "label": "Langue",
       "english": "Anglais",
+      "arabic": "العربية",
       "portuguese": "Portugais",
+      "spanish": "Espagnol",
       "french": "Français"
     }
   },
@@ -67,6 +69,17 @@
     "postman": "Postman",
     "discord": "Discord",
     "supportPremium": "Support Premium"
+  },
+  "chat": {
+    "contacts": "Contacts",
+    "groups": "Groupes",
+    "search": "Rechercher...",
+    "send": "Envoyer",
+    "sendPlaceholder": "Envoyer un message...",
+    "date": {
+      "today": "Aujourd'hui",
+      "yesterday": "Hier"
+    }
   },
   "toast": {
     "instance": {

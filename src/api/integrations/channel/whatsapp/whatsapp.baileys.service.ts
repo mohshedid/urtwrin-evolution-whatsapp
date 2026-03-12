@@ -808,18 +808,41 @@ export class BaileysStartupService extends ChannelStartupService {
   private readonly contactHandle = {
     'contacts.upsert': async (contacts: Contact[]) => {
       try {
-        const contactsRaw: any = contacts.map((contact) => ({
-          remoteJid: contact.id,
-          pushName: contact?.name || contact?.verifiedName || contact.id.split('@')[0],
-          profilePicUrl: null,
-          instanceId: this.instanceId,
-        }));
+        const contactsRaw: any = contacts.map((contact) => {
+          return {
+            remoteJid: contact.id,
+            pushName: contact?.notify || contact?.verifiedName || null,
+            phoneName: contact?.name || null,
+            profilePicUrl: null,
+            instanceId: this.instanceId,
+          };
+        });
 
         if (contactsRaw.length > 0) {
           this.sendDataWebhook(Events.CONTACTS_UPSERT, contactsRaw);
 
-          if (this.configService.get<Database>('DATABASE').SAVE_DATA.CONTACTS)
-            await this.prismaRepository.contact.createMany({ data: contactsRaw, skipDuplicates: true });
+          if (this.configService.get<Database>('DATABASE').SAVE_DATA.CONTACTS) {
+            await Promise.all(
+              contactsRaw.map(async (c: any) => {
+                await this.prismaRepository.contact.upsert({
+                  where: {
+                    remoteJid_instanceId: { remoteJid: c.remoteJid, instanceId: this.instanceId },
+                  },
+                  create: {
+                    remoteJid: c.remoteJid,
+                    pushName: c.pushName,
+                    phoneName: c.phoneName,
+                    profilePicUrl: null,
+                    instanceId: this.instanceId,
+                  },
+                  update: {
+                    ...(c.phoneName ? { phoneName: c.phoneName } : {}),
+                    ...(c.pushName ? { pushName: c.pushName } : {}),
+                  },
+                });
+              }),
+            );
+          }
 
           const usersContacts = contactsRaw.filter((c) => c.remoteJid.includes('@s.whatsapp'));
           if (usersContacts) {
@@ -846,7 +869,8 @@ export class BaileysStartupService extends ChannelStartupService {
         const updatedContacts = await Promise.all(
           contacts.map(async (contact) => ({
             remoteJid: contact.id,
-            pushName: contact?.name || contact?.verifiedName || contact.id.split('@')[0],
+            pushName: contact?.notify || contact?.verifiedName || null,
+            phoneName: contact?.name || null,
             profilePicUrl: (await this.profilePicture(contact.id)).profilePictureUrl,
             instanceId: this.instanceId,
           })),
@@ -895,12 +919,13 @@ export class BaileysStartupService extends ChannelStartupService {
     },
 
     'contacts.update': async (contacts: Partial<Contact>[]) => {
-      const contactsRaw: { remoteJid: string; pushName?: string; profilePicUrl?: string; instanceId: string }[] = [];
+      const contactsRaw: { remoteJid: string; pushName?: string; phoneName?: string; profilePicUrl?: string; instanceId: string }[] = [];
       for await (const contact of contacts) {
         this.logger.debug(`Updating contact: ${JSON.stringify(contact, null, 2)}`);
         contactsRaw.push({
           remoteJid: contact.id,
-          pushName: contact?.name ?? contact?.verifiedName,
+          pushName: contact?.notify || contact?.verifiedName || null,
+          phoneName: contact?.name || null,
           profilePicUrl: (await this.profilePicture(contact.id)).profilePictureUrl,
           instanceId: this.instanceId,
         });
@@ -913,7 +938,11 @@ export class BaileysStartupService extends ChannelStartupService {
           this.prismaRepository.contact.upsert({
             where: { remoteJid_instanceId: { remoteJid: contact.remoteJid, instanceId: contact.instanceId } },
             create: contact,
-            update: contact,
+            update: {
+              ...(contact.phoneName ? { phoneName: contact.phoneName } : {}),
+              ...(contact.pushName ? { pushName: contact.pushName } : {}),
+              ...(contact.profilePicUrl ? { profilePicUrl: contact.profilePicUrl } : {}),
+            },
           }),
         );
         await this.prismaRepository.$transaction(updateTransactions);
@@ -970,8 +999,38 @@ export class BaileysStartupService extends ChannelStartupService {
 
         for (const contact of contacts) {
           if (contact.id && (contact.notify || contact.name)) {
-            contactsMap.set(contact.id, { name: contact.name ?? contact.notify, jid: contact.id });
+            contactsMap.set(contact.id, {
+              phoneName: contact.name || null,
+              pushName: contact.notify || contact.name || null,
+              jid: contact.id,
+            });
           }
+        }
+
+        // Save contacts from history sync to database
+        if (this.configService.get<Database>('DATABASE').SAVE_DATA.CONTACTS && contactsMap.size > 0) {
+          const historyContacts = Array.from(contactsMap.values());
+          await Promise.all(
+            historyContacts.map(async (c: any) => {
+              try {
+                await this.prismaRepository.contact.upsert({
+                  where: {
+                    remoteJid_instanceId: { remoteJid: c.jid, instanceId: this.instanceId },
+                  },
+                  create: {
+                    remoteJid: c.jid,
+                    pushName: c.pushName,
+                    phoneName: c.phoneName,
+                    instanceId: this.instanceId,
+                  },
+                  update: {
+                    ...(c.phoneName ? { phoneName: c.phoneName } : {}),
+                    ...(c.pushName ? { pushName: c.pushName } : {}),
+                  },
+                });
+              } catch { /* skip */ }
+            }),
+          );
         }
 
         const chatsRaw: { remoteJid: string; instanceId: string; name?: string }[] = [];
@@ -1037,7 +1096,7 @@ export class BaileysStartupService extends ChannelStartupService {
           if (!m.pushName && !m.key.fromMe) {
             const participantJid = m.participant || m.key.participant || m.key.remoteJid;
             if (participantJid && contactsMap.has(participantJid)) {
-              m.pushName = contactsMap.get(participantJid).name;
+              m.pushName = contactsMap.get(participantJid).pushName;
             } else if (participantJid) {
               m.pushName = participantJid.split('@')[0];
             }
@@ -1180,24 +1239,75 @@ export class BaileysStartupService extends ChannelStartupService {
             select: { id: true, name: true },
           });
 
-          if (
-            existingChat &&
-            received.pushName &&
-            existingChat.name !== received.pushName &&
-            received.pushName.trim().length > 0 &&
-            !received.key.fromMe &&
-            !received.key.remoteJid.includes('@g.us')
-          ) {
-            this.sendDataWebhook(Events.CHATS_UPSERT, [{ ...existingChat, name: received.pushName }]);
+          const senderPushName = received.pushName?.trim() || '';
+          const isIndividualChat = !received.key.remoteJid.includes('@g.us');
+
+          if (existingChat) {
+            // Update existing chat name if we have a better name
+            if (
+              senderPushName.length > 0 &&
+              existingChat.name !== senderPushName &&
+              !received.key.fromMe &&
+              isIndividualChat
+            ) {
+              this.sendDataWebhook(Events.CHATS_UPSERT, [{ ...existingChat, name: senderPushName }]);
+              if (this.configService.get<Database>('DATABASE').SAVE_DATA.CHATS) {
+                try {
+                  await this.prismaRepository.chat.update({
+                    where: { id: existingChat.id },
+                    data: { name: senderPushName },
+                  });
+                } catch {
+                  console.log(`Chat update record ignored: ${received.key.remoteJid} - ${this.instanceId}`);
+                }
+              }
+            }
+          } else {
+            // Create new chat record for first-time sender
             if (this.configService.get<Database>('DATABASE').SAVE_DATA.CHATS) {
               try {
-                await this.prismaRepository.chat.update({
-                  where: { id: existingChat.id },
-                  data: { name: received.pushName },
+                await this.prismaRepository.chat.create({
+                  data: {
+                    remoteJid: received.key.remoteJid,
+                    instanceId: this.instanceId,
+                    name: isIndividualChat && !received.key.fromMe ? senderPushName || null : null,
+                  },
                 });
               } catch {
-                console.log(`Chat insert record ignored: ${received.key.remoteJid} - ${this.instanceId}`);
+                console.log(`Chat create record ignored: ${received.key.remoteJid} - ${this.instanceId}`);
               }
+            }
+          }
+
+          // Upsert contact record from message pushName (sync contact names)
+          if (
+            isIndividualChat &&
+            !received.key.fromMe &&
+            senderPushName.length > 0 &&
+            this.configService.get<Database>('DATABASE').SAVE_DATA.CONTACTS
+          ) {
+            try {
+              const existingContact = await this.prismaRepository.contact.findFirst({
+                where: { instanceId: this.instanceId, remoteJid: received.key.remoteJid },
+                select: { id: true, pushName: true },
+              });
+
+              if (!existingContact) {
+                await this.prismaRepository.contact.create({
+                  data: {
+                    remoteJid: received.key.remoteJid,
+                    pushName: senderPushName,
+                    instanceId: this.instanceId,
+                  },
+                });
+              } else if (!existingContact.pushName || existingContact.pushName === existingContact.id) {
+                await this.prismaRepository.contact.update({
+                  where: { id: existingContact.id },
+                  data: { pushName: senderPushName },
+                });
+              }
+            } catch {
+              console.log(`Contact upsert from message ignored: ${received.key.remoteJid} - ${this.instanceId}`);
             }
           }
 
@@ -1481,6 +1591,37 @@ export class BaileysStartupService extends ChannelStartupService {
           console.log(messageRaw);
 
           this.sendDataWebhook(Events.MESSAGES_UPSERT, messageRaw);
+
+          // Extract contacts from shared vCard messages
+          if (this.configService.get<Database>('DATABASE').SAVE_DATA.CONTACTS) {
+            try {
+              const vCards: string[] = [];
+              if (messageRaw.messageType === 'contactMessage' && received.message?.contactMessage?.vcard) {
+                vCards.push(received.message.contactMessage.vcard);
+              } else if (messageRaw.messageType === 'contactsArrayMessage' && received.message?.contactsArrayMessage?.contacts) {
+                for (const c of received.message.contactsArrayMessage.contacts) {
+                  if (c.vcard) vCards.push(c.vcard);
+                }
+              }
+
+              for (const vcard of vCards) {
+                const fnMatch = vcard.match(/FN:(.*)/i);
+                const telMatch = vcard.match(/TEL[^:]*:[\s]*(\+?\d[\d\s-]*\d)/i);
+                if (fnMatch && telMatch) {
+                  const name = fnMatch[1].trim();
+                  const phone = telMatch[1].replace(/[\s-]/g, '');
+                  const jid = phone.replace(/^\+/, '') + '@s.whatsapp.net';
+                  try {
+                    await this.prismaRepository.contact.upsert({
+                      where: { remoteJid_instanceId: { remoteJid: jid, instanceId: this.instanceId } },
+                      create: { remoteJid: jid, phoneName: name, instanceId: this.instanceId },
+                      update: { phoneName: name },
+                    });
+                  } catch { /* skip */ }
+                }
+              }
+            } catch { /* skip vcard parsing errors */ }
+          }
 
           await chatbotController.emit({
             instance: { instanceName: this.instance.name, instanceId: this.instanceId },

@@ -541,6 +541,177 @@ export class ChannelStartupService {
     });
   }
 
+  public async syncContactsFromMessages() {
+    // Step 0: Clean up bad data - remove "Você", "You", and number-only values from Chat.name and Contact.pushName
+    const invalidNames = ['Você', 'You', ''];
+
+    // Clean Chat.name
+    const chatsToClean = await this.prismaRepository.chat.findMany({
+      where: {
+        instanceId: this.instanceId,
+        name: { in: invalidNames },
+      },
+      select: { id: true },
+    });
+    for (const chat of chatsToClean) {
+      await this.prismaRepository.chat.update({
+        where: { id: chat.id },
+        data: { name: null },
+      });
+    }
+
+    // Clean Contact.pushName with invalid values
+    const contactsToClean = await this.prismaRepository.contact.findMany({
+      where: {
+        instanceId: this.instanceId,
+        pushName: { in: invalidNames },
+      },
+      select: { id: true },
+    });
+    for (const contact of contactsToClean) {
+      await this.prismaRepository.contact.update({
+        where: { id: contact.id },
+        data: { pushName: null },
+      });
+    }
+
+    // Also clean Chat.name where name is just the phone number
+    const allChats = await this.prismaRepository.chat.findMany({
+      where: { instanceId: this.instanceId, name: { not: null } },
+      select: { id: true, remoteJid: true, name: true },
+    });
+    for (const chat of allChats) {
+      const number = chat.remoteJid.split('@')[0];
+      if (chat.name === number) {
+        await this.prismaRepository.chat.update({
+          where: { id: chat.id },
+          data: { name: null },
+        });
+      }
+    }
+
+    // Also clean Contact.pushName where it's just the phone number
+    const allContactsForClean = await this.prismaRepository.contact.findMany({
+      where: { instanceId: this.instanceId, pushName: { not: null } },
+      select: { id: true, remoteJid: true, pushName: true },
+    });
+    for (const contact of allContactsForClean) {
+      const number = contact.remoteJid.split('@')[0];
+      if (contact.pushName === number) {
+        await this.prismaRepository.contact.update({
+          where: { id: contact.id },
+          data: { pushName: null },
+        });
+      }
+    }
+
+    // Step 1: Get all messages with pushName (distinct by remoteJid, latest first)
+    const messages = await this.prismaRepository.message.findMany({
+      where: {
+        instanceId: this.instanceId,
+        pushName: { not: null },
+      },
+      select: {
+        key: true,
+        pushName: true,
+        messageTimestamp: true,
+      },
+      orderBy: { messageTimestamp: 'desc' },
+    });
+
+    // Build a map: remoteJid -> latest pushName (skip groups and fromMe)
+    const senderMap = new Map<string, string>();
+    for (const msg of messages) {
+      const key = msg.key as any;
+      const remoteJid = key?.remoteJid;
+      if (
+        !remoteJid ||
+        remoteJid.includes('@g.us') ||
+        key?.fromMe === true ||
+        key?.fromMe === 'true' ||
+        !msg.pushName ||
+        senderMap.has(remoteJid)
+      ) {
+        continue;
+      }
+      // Skip if pushName is just the phone number or "Você"/"You"
+      const number = remoteJid.split('@')[0];
+      if (msg.pushName === number || msg.pushName === 'Você' || msg.pushName === 'You') {
+        continue;
+      }
+      senderMap.set(remoteJid, msg.pushName);
+    }
+
+    // Step 2: Get existing contacts for this instance
+    const existingContacts = await this.prismaRepository.contact.findMany({
+      where: { instanceId: this.instanceId },
+      select: { id: true, remoteJid: true, pushName: true },
+    });
+    const contactMap = new Map(existingContacts.map((c) => [c.remoteJid, c]));
+
+    let created = 0;
+    let updated = 0;
+
+    // Step 3: Create/update contacts from message pushNames
+    for (const [remoteJid, pushName] of senderMap) {
+      const existing = contactMap.get(remoteJid);
+      try {
+        if (!existing) {
+          await this.prismaRepository.contact.create({
+            data: { remoteJid, pushName, instanceId: this.instanceId },
+          });
+          created++;
+        } else if (!existing.pushName || existing.pushName === remoteJid.split('@')[0]) {
+          await this.prismaRepository.contact.update({
+            where: { id: existing.id },
+            data: { pushName },
+          });
+          updated++;
+        }
+      } catch {
+        // Skip duplicates
+      }
+    }
+
+    // Step 4: Backfill Chat.name from contacts
+    const chatsWithoutNames = await this.prismaRepository.chat.findMany({
+      where: {
+        instanceId: this.instanceId,
+        OR: [{ name: null }, { name: '' }],
+      },
+      select: { id: true, remoteJid: true },
+    });
+
+    // Reload contacts after updates
+    const allContacts = await this.prismaRepository.contact.findMany({
+      where: { instanceId: this.instanceId },
+      select: { remoteJid: true, pushName: true, phoneName: true },
+    });
+    const updatedContactMap = new Map(allContacts.map((c) => [c.remoteJid, c.phoneName || c.pushName]));
+
+    let chatsUpdated = 0;
+    for (const chat of chatsWithoutNames) {
+      const contactName = updatedContactMap.get(chat.remoteJid) || senderMap.get(chat.remoteJid);
+      if (contactName) {
+        try {
+          await this.prismaRepository.chat.update({
+            where: { id: chat.id },
+            data: { name: contactName },
+          });
+          chatsUpdated++;
+        } catch {
+          // Skip errors
+        }
+      }
+    }
+
+    return {
+      contacts: { created, updated },
+      chatsUpdated,
+      totalSendersFound: senderMap.size,
+    };
+  }
+
   public cleanMessageData(message: any) {
     if (!message) return message;
     const cleanedMessage = { ...message };
@@ -746,16 +917,16 @@ export class ChannelStartupService {
         SELECT DISTINCT ON ("Message"."key"->>'remoteJid') 
           "Contact"."id" as "contactId",
           "Message"."key"->>'remoteJid' as "remoteJid",
-          CASE 
+          CASE
             WHEN "Message"."key"->>'remoteJid' LIKE '%@g.us' THEN COALESCE("Chat"."name", "Contact"."pushName")
-            ELSE COALESCE("Contact"."pushName", "Message"."pushName")
+            WHEN "Message"."key"->>'fromMe' = 'true' THEN COALESCE("Contact"."phoneName", "Chat"."name", "Contact"."pushName")
+            ELSE COALESCE("Contact"."phoneName", "Chat"."name", "Contact"."pushName", "Message"."pushName")
           END as "pushName",
           "Contact"."profilePicUrl",
           COALESCE(
-            to_timestamp("Message"."messageTimestamp"::double precision), 
+            to_timestamp("Message"."messageTimestamp"::double precision),
             "Contact"."updatedAt"
           ) as "updatedAt",
-          "Chat"."name" as "pushName",
           "Chat"."createdAt" as "windowStart",
           "Chat"."createdAt" + INTERVAL '24 hours' as "windowExpires",
           "Chat"."unreadMessages" as "unreadMessages",
@@ -763,7 +934,7 @@ export class ChannelStartupService {
           "Message"."id" AS "lastMessageId",
           "Message"."key" AS "lastMessage_key",
           CASE
-            WHEN "Message"."key"->>'fromMe' = 'true' THEN 'Você'
+            WHEN "Message"."key"->>'fromMe' = 'true' THEN 'You'
             ELSE "Message"."pushName"
           END AS "lastMessagePushName",
           "Message"."participant" AS "lastMessageParticipant",

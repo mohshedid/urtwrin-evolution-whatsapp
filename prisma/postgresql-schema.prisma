@@ -141,6 +141,7 @@ model Contact {
   id            String    @id @default(cuid())
   remoteJid     String    @db.VarChar(100)
   pushName      String?   @db.VarChar(100)
+  phoneName     String?   @db.VarChar(100)
   profilePicUrl String?   @db.VarChar(500)
   createdAt     DateTime? @default(now()) @db.Timestamp
   updatedAt     DateTime? @updatedAt @db.Timestamp
